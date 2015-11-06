@@ -1,8 +1,8 @@
-
 from pyVmomi import vim
 from pyVim import connect
 from jnpr.junos.factory.factory_loader import FactoryLoader
 from jnpr.junos import Device
+from jnpr.junos.op.vlan import VlanTable
 from threading import Thread
 import atexit, sys, getopt, requests, ssl, argparse, re, yaml
 
@@ -23,7 +23,21 @@ EtherSwView:
     mac: mac-address
     mac_type: mac-type
     interface: mac-interfaces-list/mac-interfaces
+
+VLTable:
+  rpc: get-vlan-information
+  item: vlan
+  key: vlan-tag
+  view: VLView
+
+VLView:
+  fields:
+    vlanname: vlan-name
+    vlantag: vlan-tag
 '''
+
+
+
 globals().update(FactoryLoader().load(yaml.load(yml)))
 
 
@@ -46,39 +60,40 @@ else:
 
 
 ### Connect to Juniper Device
-def ConnectJuniper():
-    
+def ConnectJuniper(host, user, password):
+
 
     global dev
-    print '\n\n' + "Establish connection to Juniper System..." + '\t\t\n',
-    dev=Device(host='Insert_Device', user="Insert_user", password="Insert_password")
+    dev=Device(host=host, user=user, password=password)
     dev.open()
+    print "Established connection to Juniper System..."
 
 ### EndConnect to Juniper Device
 
 ### Connect to vCenter Device
-def ConnectvCenter():
+def ConnectvCenter(host, user, password):
 
     global content
-    print "Establish connection to Juniper VMware vCenter" + '\t\t\n', 
-    service_instance = connect.SmartConnect(host='Insert_Device',
-                                            user='Insert_user',
-                                            pwd='Insert_password',
+
+    service_instance = connect.SmartConnect(host=host,
+                                            user=user,
+                                            pwd=password,
                                             port=int(443))
-    
+
     atexit.register(connect.Disconnect, service_instance)
     content = service_instance.RetrieveContent()
+    print "Established connection to Juniper VMware vCenter"
 
 ### End Connect to vCenter Device
 
 ### Matching the correct syntax for port on Junos. Eg, ge-0/0/0
 def valid_syntax(port):
-    
+
     pattern = re.compile(r'^[ge|xe|et]+-[0-99]+/[0-99]+/[0-99]+\Z')
 
     if pattern.match(port):
             return port
-    
+
 
     msg = "Not a valid format: '{0}'.".format(port)
     raise argparse.ArgumentTypeError(msg)
@@ -87,54 +102,72 @@ def valid_syntax(port):
 
 ### Retrieving all VM's registered on vCenter
 def GetVMs(content):
-    print("Getting all VMs" + '\t\t\t\t\t\t'),
+
     vm_view = content.viewManager.CreateContainerView(content.rootFolder,
                                                       [vim.VirtualMachine],
                                                       True)
     obj = [vm for vm in vm_view.view]
     vm_view.Destroy()
-    print("[Done]")
     return obj
 
 ### Collecting all MAC addresses on the Junos device attached to the selected port
 def Collect_Mac_Map(phy_port):
 
-    print("Collecting learned MAC from specified interface" + '\t\t'),
+
     swlist = EtherSwTable(dev)
     swlist.get()
-    obj = set()
+    obj = {}
     for myloop in swlist:
         if (myloop.interface == phy_port):
-            obj.add (myloop.mac) 
-    print("[Done]")
+            obj[myloop.mac] = myloop.vlan_name
+
+
+    return obj
+
+
+def Collect_VLAN_Map():
+
+
+    vlanlist = VLTable(dev)
+    vlanlist.get()
+    obj = {}
+
+
+    for myloop in vlanlist:
+
+        obj[myloop.vlanname] = myloop.vlantag
+
     return obj
 
 
 ### Matches the Mac addresses seen on the Junos device to the mac adresses found on vCenter
 def mac_vm_matching(vms):
     matchlist = {}
-    macmatchlist = set()
     macmatchlist = Collect_Mac_Map(phy_port)
+
+
     obj = {}
-    
+
     for vm in vms:
 
         obj = mac_match(vm, macmatchlist, matchlist)
 
+
     return obj
 
 def mac_match(vm, macmatchlist, matchlist):
-    
+
 
     for target in vm.config.hardware.device:
         if isinstance(target, vim.vm.device.VirtualEthernetCard):
 
             if (target.macAddress) in macmatchlist:
-                matchlist[target.macAddress]=vm.name
-    
-    
+#                matchlist[target.macAddress]=vm.name
+                matchlist[target.macAddress]=(vm.name, macmatchlist[target.macAddress])
+ #               print macmatchlist
+#
     return matchlist
-    
+
 
 
 
@@ -142,7 +175,7 @@ def mac_match(vm, macmatchlist, matchlist):
 
 
 
-parser = argparse.ArgumentParser(description='This is a PyMOTW sample program')
+parser = argparse.ArgumentParser(description='vmtrace')
 parser.add_argument('-p', "--port", help="Enter port - format (ge, xe, et) -n/n/n ", required=True, type=valid_syntax)
 parser.add_argument('-u', "--unit", help="Enter port - format n ", required=True)
 
@@ -156,8 +189,9 @@ phy_port = results.port +'.' + results.unit
 
 
 ### Multitheaded connection to vCenter and Juniper
-ConnectJ = Thread(target = ConnectJuniper, args=())
-ConnectV = Thread(target = ConnectvCenter, args=())
+ConnectJ = Thread(target = ConnectJuniper, args=('juniper_device', 'user', 'password'))
+ConnectV = Thread(target = ConnectvCenter, args=('vcenter', 'user', 'password'))
+
 ConnectJ.start()
 ConnectV.start()
 
@@ -165,9 +199,13 @@ ConnectJ.join()
 ConnectV.join()
 
 ### End Multitheaded connection to vCenter and Juniper
- 
+
+
+vlans = Collect_VLAN_Map()
 vms = GetVMs(content)
 
+print '\n\n' + 'Interface' +'\t' + 'VLAN ID' + '\t\t' + 'VM MAC' + '\t\t\t' + 'Virtual Machine Name'
 for key, value in mac_vm_matching(vms).iteritems() :
-    print phy_port +'\t\t' + key +'\t\t' + value
-
+    vmname, vlan_desc,  = value
+    vlan_desc = vlans[vlan_desc]
+    print phy_port +'\t' +vlan_desc + '\t\t'  + key +'\t' + vmname
