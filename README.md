@@ -6,4 +6,3 @@ NOTE: It does not work with VMware NSX, but will will map standard vSwitches and
  
 It will extract VM information from vCenter
 Map it to the specified interface using the PyEZ tables: EthPortTable  and VlanTable 
- 
