@@ -66,7 +66,7 @@ def ConnectJuniper(host, user, password):
 
 
     global dev
-    dev=Device(host='172.30.105.10', user='root', password='JunipeR')
+    dev=Device(host='Juniper Device', user='user', password='password')
     dev.open()
     print "Established connection to Juniper System..."
 
@@ -77,10 +77,11 @@ def ConnectvCenter(host, user, password):
 
     global content
 
-    service_instance = connect.SmartConnect(host='172.30.105.50',
-                                            user='root',
-                                            pwd='JunipeR',
+    service_instance = connect.SmartConnect(host=host,
+                                            user=user,
+                                            pwd=password,
                                             port=int(443))
+
 
     atexit.register(connect.Disconnect, service_instance)
     content = service_instance.RetrieveContent()
