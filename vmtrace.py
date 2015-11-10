@@ -1,10 +1,12 @@
+
+
 from pyVmomi import vim
 from pyVim import connect
 from jnpr.junos.factory.factory_loader import FactoryLoader
 from jnpr.junos import Device
 from jnpr.junos.op.vlan import VlanTable
 from threading import Thread
-import atexit, sys, getopt, requests, ssl, argparse, re, yaml
+import atexit, sys, getopt, requests, ssl, argparse, re, yaml, pprint
 
 global phy_port
 
@@ -64,7 +66,7 @@ def ConnectJuniper(host, user, password):
 
 
     global dev
-    dev=Device(host=host, user=user, password=password)
+    dev=Device(host='172.30.105.10', user='root', password='JunipeR')
     dev.open()
     print "Established connection to Juniper System..."
 
@@ -75,9 +77,9 @@ def ConnectvCenter(host, user, password):
 
     global content
 
-    service_instance = connect.SmartConnect(host=host,
-                                            user=user,
-                                            pwd=password,
+    service_instance = connect.SmartConnect(host='172.30.105.50',
+                                            user='root',
+                                            pwd='JunipeR',
                                             port=int(443))
 
     atexit.register(connect.Disconnect, service_instance)
@@ -162,10 +164,9 @@ def mac_match(vm, macmatchlist, matchlist):
         if isinstance(target, vim.vm.device.VirtualEthernetCard):
 
             if (target.macAddress) in macmatchlist:
-#                matchlist[target.macAddress]=vm.name
+
                 matchlist[target.macAddress]=(vm.name, macmatchlist[target.macAddress])
- #               print macmatchlist
-#
+
     return matchlist
 
 
@@ -177,13 +178,16 @@ def mac_match(vm, macmatchlist, matchlist):
 
 parser = argparse.ArgumentParser(description='vmtrace')
 parser.add_argument('-p', "--port", help="Enter port - format (ge, xe, et) -n/n/n ", required=True, type=valid_syntax)
-parser.add_argument('-u', "--unit", help="Enter port - format n ", required=True)
+parser.add_argument('-u', "--unit", help="Enter unit - format n ", required=True)
+parser.add_argument('-s', "--sort", help="Enter sort option -  mac, vlan, vmname ", required=False, choices=['mac', 'vlan', 'vmname'])
+
 
 results = parser.parse_args()
 
 phy_port = results.port +'.' + results.unit
-
-
+if results.sort == ('mac'): sort_type = 0
+elif results.sort == 'vlan': sort_type = 1
+elif results.sort == 'vmname': sort_type = 2
 
 ### End Arguments required
 
@@ -201,11 +205,30 @@ ConnectV.join()
 ### End Multitheaded connection to vCenter and Juniper
 
 
+### main start
+
+matchlist = []
 vlans = Collect_VLAN_Map()
 vms = GetVMs(content)
 
-print '\n\n' + 'Interface' +'\t' + 'VLAN ID' + '\t\t' + 'VM MAC' + '\t\t\t' + 'Virtual Machine Name'
+### Create the matchinglist
+
 for key, value in mac_vm_matching(vms).iteritems() :
     vmname, vlan_desc,  = value
     vlan_desc = vlans[vlan_desc]
+    matchlist.append([key, vlan_desc, vmname])
+
+### End Create the matchinglist
+
+
+### Sort the matchinglist pased on args value
+
+sortedlist = sorted(matchlist, key=lambda tup: tup[sort_type])
+
+print '\n\n' + 'Interface' +'\t' + 'VLAN ID' + '\t\t' + 'VM MAC' + '\t\t\t' + 'Virtual Machine Name'
+for value in sortedlist:
+    key, vlan_desc, vmname  = value
     print phy_port +'\t' +vlan_desc + '\t\t'  + key +'\t' + vmname
+
+
+dev.close()
