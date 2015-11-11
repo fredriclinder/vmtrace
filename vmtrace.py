@@ -4,12 +4,14 @@ from pyVmomi import vim
 from pyVim import connect
 from jnpr.junos.factory.factory_loader import FactoryLoader
 from jnpr.junos import Device
-from jnpr.junos.op.vlan import VlanTable
 from threading import Thread
-import atexit, sys, getopt, requests, ssl, argparse, re, yaml, pprint
-
-global phy_port
-
+import atexit
+import requests
+import ssl
+import argparse
+import re
+import requests
+import yaml
 
 yml = '''
 ---
@@ -37,59 +39,41 @@ VLView:
     vlanname: vlan-name
     vlantag: vlan-tag
 '''
-
-
-
 globals().update(FactoryLoader().load(yaml.load(yml)))
 
-
-### Disable Cert request for vCenter 5.5
-
+# Disable Cert request for vCenter 5.5
 requests.packages.urllib3.disable_warnings()
-
-# Remove HTTPS verification
 try:
     _create_unverified_https_context = ssl._create_unverified_context
 except AttributeError:
-    # Legacy Python that doesn't verify HTTPS certificates by default
     pass
 else:
-    # Handle target environment that doesn't support HTTPS verification
     ssl._create_default_https_context = _create_unverified_https_context
 
-### End disable Cert request
-
-
-
-### Connect to Juniper Device
-def ConnectJuniper(host, user, password):
+# Connect to Juniper Device
+def ConnectJuniper(jhost, juser, jpassword):
 
 
     global dev
-    dev=Device(host='Juniper Device', user='user', password='password')
+    dev=Device(host=jhost, user=juser, password=jpassword)
     dev.open()
     print "Established connection to Juniper System..."
 
-### EndConnect to Juniper Device
-
-### Connect to vCenter Device
-def ConnectvCenter(host, user, password):
+# Connect to vCenter Device
+def ConnectvCenter(vhost, vuser, vpassword):
 
     global content
 
-    service_instance = connect.SmartConnect(host=host,
-                                            user=user,
-                                            pwd=password,
+    service_instance = connect.SmartConnect(host=vhost,
+                                            user=vuser,
+                                            pwd=vpassword,
                                             port=int(443))
-
 
     atexit.register(connect.Disconnect, service_instance)
     content = service_instance.RetrieveContent()
     print "Established connection to Juniper VMware vCenter"
 
-### End Connect to vCenter Device
-
-### Matching the correct syntax for port on Junos. Eg, ge-0/0/0
+# Matching the correct syntax for port on Junos. Eg, ge-0/0/0
 def valid_syntax(port):
 
     pattern = re.compile(r'^[ge|xe|et]+-[0-99]+/[0-99]+/[0-99]+\Z')
@@ -100,10 +84,8 @@ def valid_syntax(port):
 
     msg = "Not a valid format: '{0}'.".format(port)
     raise argparse.ArgumentTypeError(msg)
-### End Matching the correct syntax for port on Junos
 
-
-### Retrieving all VM's registered on vCenter
+# Retrieving all VM's registered on vCenter
 def GetVMs(content):
 
     vm_view = content.viewManager.CreateContainerView(content.rootFolder,
@@ -113,7 +95,7 @@ def GetVMs(content):
     vm_view.Destroy()
     return obj
 
-### Collecting all MAC addresses on the Junos device attached to the selected port
+# Collecting all MAC addresses on the Junos device attached to the selected port
 def Collect_Mac_Map(phy_port):
 
 
@@ -127,7 +109,7 @@ def Collect_Mac_Map(phy_port):
 
     return obj
 
-
+# Collecting all VLAN's
 def Collect_VLAN_Map():
 
 
@@ -142,9 +124,9 @@ def Collect_VLAN_Map():
 
     return obj
 
+# Matches the Mac addresses seen on the Junos device to the mac adresses found on vCenter
+def mac_vm_matching(vms, phy_port):
 
-### Matches the Mac addresses seen on the Junos device to the mac adresses found on vCenter
-def mac_vm_matching(vms):
     matchlist = {}
     macmatchlist = Collect_Mac_Map(phy_port)
 
@@ -157,79 +139,62 @@ def mac_vm_matching(vms):
 
 
     return obj
-
 def mac_match(vm, macmatchlist, matchlist):
 
 
     for target in vm.config.hardware.device:
-        if isinstance(target, vim.vm.device.VirtualEthernetCard):
-
+        if (target.key >= 4000) and (target.key < 5000):
             if (target.macAddress) in macmatchlist:
-
-                matchlist[target.macAddress]=(vm.name, macmatchlist[target.macAddress])
+                matchlist[target.macAddress]=(vm.name, macmatchlist[target.macAddress],vm.summary.runtime.host.name)
 
     return matchlist
 
-
-
-
-### Arguments required
-
-
-
+# Arguments required
 parser = argparse.ArgumentParser(description='vmtrace')
 parser.add_argument('-p', "--port", help="Enter port - format (ge, xe, et) -n/n/n ", required=True, type=valid_syntax)
 parser.add_argument('-u', "--unit", help="Enter unit - format n ", required=True)
 parser.add_argument('-s', "--sort", help="Enter sort option -  mac, vlan, vmname ", required=False, choices=['mac', 'vlan', 'vmname'])
-
-
 results = parser.parse_args()
-
-phy_port = results.port +'.' + results.unit
 if results.sort == ('mac'): sort_type = 0
 elif results.sort == 'vlan': sort_type = 1
 elif results.sort == 'vmname': sort_type = 2
 
-### End Arguments required
+# Connection requirements
+juniper_device = 'juniper_device'
+juser = 'user'
+jpassword = 'password'
 
+virtualcenter_device = 'virtualcenter_device'
+vuser = 'user'
+vpassword = 'password'
 
-### Multitheaded connection to vCenter and Juniper
-ConnectJ = Thread(target = ConnectJuniper, args=('juniper_device', 'user', 'password'))
-ConnectV = Thread(target = ConnectvCenter, args=('vcenter', 'user', 'password'))
-
+# Multitheaded connection to vCenter and Juniper
+ConnectJ = Thread(target = ConnectJuniper, args=(juniper_device, juser, jpassword))
+ConnectV = Thread(target = ConnectvCenter, args=(virtualcenter_device, vuser, vpassword))
 ConnectJ.start()
 ConnectV.start()
-
 ConnectJ.join()
 ConnectV.join()
 
-### End Multitheaded connection to vCenter and Juniper
-
-
-### main start
-
+# main start
+phy_port = results.port +'.' + results.unit
 matchlist = []
 vlans = Collect_VLAN_Map()
 vms = GetVMs(content)
 
-### Create the matchinglist
-
-for key, value in mac_vm_matching(vms).iteritems() :
-    vmname, vlan_desc,  = value
+# Create the matchinglist
+for key, value in mac_vm_matching(vms, results.port +'.' + results.unit).iteritems() :
+    vmname, vlan_desc, esxihost = value
     vlan_desc = vlans[vlan_desc]
-    matchlist.append([key, vlan_desc, vmname])
+    matchlist.append([key, vlan_desc, vmname, esxihost])
 
-### End Create the matchinglist
-
-
-### Sort the matchinglist pased on args value
-
+# Sort the matchinglist pased on args value
 sortedlist = sorted(matchlist, key=lambda tup: tup[sort_type])
 
-print '\n\n' + 'Interface' +'\t' + 'VLAN ID' + '\t\t' + 'VM MAC' + '\t\t\t' + 'Virtual Machine Name'
+print '\n\n' + 'Interface' +'\t' + 'VLAN ID' + '\t\t' + 'VM MAC' + '\t\t\t' + 'VMware Host' + '\t\t' + 'Virtual Machine Name'
 for value in sortedlist:
-    key, vlan_desc, vmname  = value
-    print phy_port +'\t' +vlan_desc + '\t\t'  + key +'\t' + vmname
+    key, vlan_desc, vmname, esxihost  = value
+    print results.port +'.' + results.unit +'\t' +vlan_desc + '\t\t'  + key +'\t' + esxihost +'\t\t' + vmname
 
-
+# Close connections
 dev.close()
