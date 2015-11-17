@@ -1,5 +1,3 @@
-
-
 from pyVmomi import vim
 from pyVim import connect
 from jnpr.junos.factory.factory_loader import FactoryLoader
@@ -39,16 +37,14 @@ VLView:
     vlanname: vlan-name
     vlantag: vlan-tag
 '''
+
 globals().update(FactoryLoader().load(yaml.load(yml)))
 
 # Disable Cert request for vCenter 5.5
 requests.packages.urllib3.disable_warnings()
-try:
-    _create_unverified_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-else:
-    ssl._create_default_https_context = _create_unverified_https_context
+try: _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError: pass
+else: ssl._create_default_https_context = _create_unverified_https_context
 
 # Connect to Juniper Device
 def ConnectJuniper(jhost, juser, jpassword):
@@ -73,17 +69,30 @@ def ConnectvCenter(vhost, vuser, vpassword):
     content = service_instance.RetrieveContent()
     print "Established connection to Juniper VMware vCenter"
 
-# Matching the correct syntax for port on Junos. Eg, ge-0/0/0
+# Syntax validation for interface type on Junos. Eg, ge-0/0/0.0
 def valid_syntax(port):
 
-    pattern = re.compile(r'^[ge|xe|et]+-[0-99]+/[0-99]+/[0-99]+\Z')
+    pattern = re.compile(r'^[ge|xe|et]+-[0-99]+/[0-99]+/[0-99]+[.]+[0-99]\Z')
 
+    if port == 'all':
+        return port
     if pattern.match(port):
-            return port
+        return port
 
 
     msg = "Not a valid format: '{0}'.".format(port)
     raise argparse.ArgumentTypeError(msg)
+
+# Collecting all VLAN's
+def Collect_VLAN_Map():
+
+
+    vlanlist = VLTable(dev)
+    vlanlist.get()
+    obj = {}
+    for myloop in vlanlist:
+        obj[myloop.vlanname] = myloop.vlantag
+    return obj
 
 # Retrieving all VM's registered on vCenter
 def GetVMs(content):
@@ -103,24 +112,10 @@ def Collect_Mac_Map(phy_port):
     swlist.get()
     obj = {}
     for myloop in swlist:
-        if (myloop.interface == phy_port):
-            obj[myloop.mac] = myloop.vlan_name
-
-
-    return obj
-
-# Collecting all VLAN's
-def Collect_VLAN_Map():
-
-
-    vlanlist = VLTable(dev)
-    vlanlist.get()
-    obj = {}
-
-
-    for myloop in vlanlist:
-
-        obj[myloop.vlanname] = myloop.vlantag
+        if phy_port == 'all':
+            obj[myloop.mac] = (myloop.vlan_name, myloop.interface)
+        elif (myloop.interface == phy_port):
+            obj[myloop.mac] = (myloop.vlan_name, myloop.interface)
 
     return obj
 
@@ -129,10 +124,7 @@ def mac_vm_matching(vms, phy_port):
 
     matchlist = {}
     macmatchlist = Collect_Mac_Map(phy_port)
-
-
     obj = {}
-
     for vm in vms:
 
         obj = mac_match(vm, macmatchlist, matchlist)
@@ -140,61 +132,94 @@ def mac_vm_matching(vms, phy_port):
 
     return obj
 def mac_match(vm, macmatchlist, matchlist):
-
-
     for target in vm.config.hardware.device:
         if (target.key >= 4000) and (target.key < 5000):
             if (target.macAddress) in macmatchlist:
                 matchlist[target.macAddress]=(vm.name, macmatchlist[target.macAddress],vm.summary.runtime.host.name)
-
     return matchlist
 
+def arg_function():
 # Arguments required
-parser = argparse.ArgumentParser(description='vmtrace')
-parser.add_argument('-p', "--port", help="Enter port - format (ge, xe, et) -n/n/n ", required=True, type=valid_syntax)
-parser.add_argument('-u', "--unit", help="Enter unit - format n ", required=True)
-parser.add_argument('-s', "--sort", help="Enter sort option -  mac, vlan, vmname ", required=False, choices=['mac', 'vlan', 'vmname'])
-results = parser.parse_args()
-if results.sort == ('mac'): sort_type = 0
-elif results.sort == 'vlan': sort_type = 1
-elif results.sort == 'vmname': sort_type = 2
+    parser = argparse.ArgumentParser(description='VMtrace - mapping virtual machines to interfaces on JUNOS')
+    subparsers = parser.add_subparsers(
+                                        title='main-options',
+                                        description='valid main-options',
+                                        help=''
+                                        )
+    parser_list = subparsers.add_parser('list')
+    parser_list.set_defaults(choice='list')
+    parser_list.add_argument('-i', "--interface", help="Enter logical interface - format (ge, xe, et) -n/n/n.n ",
+                                        required=False,
+                                        default='all',
+                                        type=valid_syntax
+                                        )
+    parser_list.add_argument('-s', "--sort", help="Enter sort option -  mac, vlan, vmname",
+                                        required=False,
+                                        choices=['mac', 'vlan', 'vmname', 'interface']
+                                        )
+    parser_find = subparsers.add_parser('find')
+    parser_find.set_defaults(choice='find')
+    parser_find.add_argument('-v', "--vm", help="Enter the virtual machine name or part of a name ",
+                                        required=True,
+                                        )
+    parser_find.add_argument('-i', "--interface",
+                                        default='all'
+                                        )
+    parser_find.add_argument('-s', "--sort", help="Enter sort option -  mac, vlan, vmname",
+                                        required=False,
+                                        choices=['mac', 'vlan', 'vmname', 'interface']
+                                        )
+    return (parser.parse_args())
 
-# Connection requirements
-juniper_device = 'juniper_device'
-juser = 'user'
-jpassword = 'password'
+def main():
+    matchlist = []
+    results = arg_function()
+    # Sort the matchinglist pased on args value
+    sort_type = 1
+    if results.sort == ('mac'): sort_type = 0
+    elif results.sort == 'interface': sort_type = 1
+    elif results.sort == 'vlan': sort_type = 2
+    elif results.sort == 'vmname': sort_type = 3
 
-virtualcenter_device = 'virtualcenter_device'
-vuser = 'user'
-vpassword = 'password'
+    # Connection requirements
+    juniper_device = 'device'
+    juser = 'user'
+    jpassword = 'password'
 
-# Multitheaded connection to vCenter and Juniper
-ConnectJ = Thread(target = ConnectJuniper, args=(juniper_device, juser, jpassword))
-ConnectV = Thread(target = ConnectvCenter, args=(virtualcenter_device, vuser, vpassword))
-ConnectJ.start()
-ConnectV.start()
-ConnectJ.join()
-ConnectV.join()
+    virtualcenter_device = 'virtualcenter'
+    vuser = 'user'
+    vpassword = 'password'
 
-# main start
-phy_port = results.port +'.' + results.unit
-matchlist = []
-vlans = Collect_VLAN_Map()
-vms = GetVMs(content)
+    # Multitheaded connection to vCenter and Juniper
+    ConnectJ = Thread(target = ConnectJuniper, args=(juniper_device, juser, jpassword))
+    ConnectV = Thread(target = ConnectvCenter, args=(virtualcenter_device, vuser, vpassword))
+    ConnectJ.start()
+    ConnectV.start()
+    ConnectJ.join()
+    ConnectV.join()
 
-# Create the matchinglist
-for key, value in mac_vm_matching(vms, results.port +'.' + results.unit).iteritems() :
-    vmname, vlan_desc, esxihost = value
-    vlan_desc = vlans[vlan_desc]
-    matchlist.append([key, vlan_desc, vmname, esxihost])
+    vlans = Collect_VLAN_Map()
+    vms = GetVMs(content)
+    # Create the matchinglist
+    for key, value in mac_vm_matching(vms, results.interface).iteritems() :
+        vmname, vlan_info, esxihost = value
+        vlan_desc, interface = vlan_info
+        vlan_desc = vlans[vlan_desc]
+        matchlist.append([key, interface, vlan_desc, vmname, esxihost])
 
-# Sort the matchinglist pased on args value
-sortedlist = sorted(matchlist, key=lambda tup: tup[sort_type])
+    print '\n\n' + 'Interface' +'\t' + 'VLAN ID' + '\t\t' + 'VM MAC' + '\t\t\t' + 'VMware Host' + '\t\t' + 'Virtual Machine Name'
+    sortedlist = sorted(matchlist, key=lambda tup: tup[sort_type])
+    for value in sortedlist:
+        vmmac, interface, vlan_desc, vmname, esxihost = value
+        if results.choice == ('list'):
+            print interface +'\t' +vlan_desc + '\t\t'  + vmmac +'\t' + esxihost +'\t\t' + vmname
+        elif results.choice == ('find'):
+            if results.vm in vmname:
+                print interface +'\t' +vlan_desc + '\t\t'  + vmmac +'\t' + esxihost +'\t\t' + vmname
 
-print '\n\n' + 'Interface' +'\t' + 'VLAN ID' + '\t\t' + 'VM MAC' + '\t\t\t' + 'VMware Host' + '\t\t' + 'Virtual Machine Name'
-for value in sortedlist:
-    key, vlan_desc, vmname, esxihost  = value
-    print results.port +'.' + results.unit +'\t' +vlan_desc + '\t\t'  + key +'\t' + esxihost +'\t\t' + vmname
+    # Close connections
+    dev.close()
 
-# Close connections
-dev.close()
+# Start program
+if __name__ == "__main__":
+   main()
